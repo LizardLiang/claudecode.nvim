@@ -99,6 +99,7 @@
 ---@field disable_broadcast_debouncing? boolean
 ---@field enable_broadcast_debouncing_in_tests? boolean
 ---@field terminal ClaudeCodeTerminalConfig?
+---@field disable_open_on_send?boolean
 
 -- Server interface for main module
 ---@class ClaudeCodeServerFacade

@@ -31,6 +31,7 @@ M.defaults = {
     { name = "Claude Haiku 3.5 (Latest)", value = "haiku" },
   },
   terminal = nil, -- Will be lazy-loaded to avoid circular dependency
+  disable_open_on_send = false, -- stop this to open the terminal window on send
 }
 
 ---Validates the provided configuration table.

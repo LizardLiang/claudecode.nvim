@@ -268,17 +268,22 @@ function M.send_at_mention(file_path, start_line, end_line, context)
     -- Claude is connected, send immediately and ensure terminal is visible
     local success, error_msg = M._broadcast_at_mention(file_path, start_line, end_line)
     if success then
-      local terminal = require("claudecode.terminal")
-      terminal.ensure_visible()
+      if not M.state.config.disable_open_on_send then
+        -- Show terminal if not already visible
+        local terminal = require("claudecode.terminal")
+        terminal.ensure_visible()
+      end
     end
     return success, error_msg
   else
     -- Claude not connected, queue the mention and launch terminal
     queue_mention(file_path, start_line, end_line)
 
-    -- Launch terminal with Claude Code
-    local terminal = require("claudecode.terminal")
-    terminal.open()
+    if not M.state.config.disable_open_on_send then
+      -- Launch terminal with Claude Code
+      local terminal = require("claudecode.terminal")
+      terminal.open()
+    end
 
     logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
 
