@@ -296,9 +296,9 @@ function M.send_at_mention(file_path, start_line, end_line, context)
       local terminal = require("claudecode.terminal")
       if M.state.config and M.state.config.focus_after_send then
         -- Open focuses the terminal without toggling/hiding if already focused
-        terminal.open()
+        -- terminal.open()
       else
-        terminal.ensure_visible()
+        -- terminal.ensure_visible()
       end
     end
     return success, error_msg
@@ -309,7 +309,7 @@ function M.send_at_mention(file_path, start_line, end_line, context)
     local terminal = require("claudecode.terminal")
     if not M.state.config.disable_open_on_send then
       -- Launch terminal with Claude Code
-      terminal.open()
+      -- terminal.open()
     end
 
     logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
