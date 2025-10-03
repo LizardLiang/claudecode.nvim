@@ -47,7 +47,21 @@ function M.is_claude_connected()
 
   local server_module = require("claudecode.server.init")
   local status = server_module.get_status()
-  return status.running and status.client_count > 0
+  if not status.running then
+    return false
+  end
+
+  -- Prefer handshake-aware check when client info is available; otherwise fall back to client_count
+  if status.clients and #status.clients > 0 then
+    for _, info in ipairs(status.clients) do
+      if (info.state == "connected" or info.handshake_complete == true) and info.handshake_complete == true then
+        return true
+      end
+    end
+    return false
+  else
+    return status.client_count and status.client_count > 0
+  end
 end
 
 ---Clear the mention queue and stop any pending timer
@@ -149,8 +163,16 @@ function M.process_mention_queue(from_new_connection)
   end
 
   if not M.is_claude_connected() then
-    -- Still disconnected, wait for connection
-    logger.debug("queue", "Claude not connected, keeping " .. #M.state.mention_queue .. " mentions queued")
+    -- Still disconnected or handshake not complete yet, wait for readiness
+    logger.debug("queue", "Claude not ready (no handshake). Keeping ", #M.state.mention_queue, " mentions queued")
+
+    -- If triggered by a new connection, poll until handshake completes (bounded by connection_timeout timer)
+    if from_new_connection then
+      local retry_delay = math.max(50, math.floor((M.state.config.connection_wait_delay or 200) / 4))
+      vim.defer_fn(function()
+        M.process_mention_queue(true)
+      end, retry_delay)
+    end
     return
   end
 
@@ -173,7 +195,7 @@ function M.process_mention_queue(from_new_connection)
 
   logger.debug("queue", "Processing " .. #mentions_to_send .. " queued @ mentions")
 
-  -- Send mentions with 10ms delay between each to prevent WebSocket buffer overflow
+  -- Send mentions with a small delay between each to prevent WebSocket/extension overwhelm
   local function send_mention_sequential(index)
     if index > #mentions_to_send then
       logger.debug("queue", "All queued mentions sent successfully")
@@ -204,9 +226,10 @@ function M.process_mention_queue(from_new_connection)
 
     -- Process next mention with delay
     if index < #mentions_to_send then
+      local inter_message_delay = 25 -- ms
       vim.defer_fn(function()
         send_mention_sequential(index + 1)
-      end, 10) -- 10ms delay between mentions
+      end, inter_message_delay)
     end
   end
 
@@ -214,9 +237,11 @@ function M.process_mention_queue(from_new_connection)
   if #mentions_to_send > 0 then
     if from_new_connection then
       -- Wait for connection_wait_delay when processing queue after new connection
+      local initial_delay = (M.state.config and M.state.config.connection_wait_delay) or 200
+      logger.debug("queue", "Waiting ", initial_delay, "ms after connect before flushing queue")
       vim.defer_fn(function()
         send_mention_sequential(1)
-      end, M.state.config.connection_wait_delay)
+      end, initial_delay)
     else
       -- Send immediately for debounced processing (Claude already connected)
       send_mention_sequential(1)
@@ -269,8 +294,10 @@ function M.send_at_mention(file_path, start_line, end_line, context)
     local success, error_msg = M._broadcast_at_mention(file_path, start_line, end_line)
     if success then
       local terminal = require("claudecode.terminal")
-      if not M.state.config.disable_open_on_send then
-        -- Show terminal if not already visible
+      if M.state.config and M.state.config.focus_after_send then
+        -- Open focuses the terminal without toggling/hiding if already focused
+        terminal.open()
+      else
         terminal.ensure_visible()
       end
     end
@@ -292,7 +319,7 @@ function M.send_at_mention(file_path, start_line, end_line, context)
 end
 
 ---Set up the plugin with user configuration
----@param opts ClaudeCodeConfig|nil Optional configuration table to override defaults.
+---@param opts PartialClaudeCodeConfig|nil Optional configuration table to override defaults.
 ---@return table module The plugin module
 function M.setup(opts)
   opts = opts or {}
@@ -305,6 +332,27 @@ function M.setup(opts)
 
   -- Setup terminal module: always try to call setup to pass terminal_cmd and env,
   -- even if terminal_opts (for split_side etc.) are not provided.
+  -- Map top-level cwd-related aliases into terminal config for convenience
+  do
+    local t = opts.terminal or {}
+    local had_alias = false
+    if opts.git_repo_cwd ~= nil then
+      t.git_repo_cwd = opts.git_repo_cwd
+      had_alias = true
+    end
+    if opts.cwd ~= nil then
+      t.cwd = opts.cwd
+      had_alias = true
+    end
+    if opts.cwd_provider ~= nil then
+      t.cwd_provider = opts.cwd_provider
+      had_alias = true
+    end
+    if had_alias then
+      opts.terminal = t
+    end
+  end
+
   local terminal_setup_ok, terminal_module = pcall(require, "claudecode.terminal")
   if terminal_setup_ok then
     -- Guard in case tests or user replace the module with a minimal stub without `setup`.
@@ -670,22 +718,27 @@ function M._create_commands()
 
     if is_tree_buffer then
       local integrations = require("claudecode.integrations")
+      local visual_cmd_module = require("claudecode.visual_commands")
       local files, error
 
-      -- For mini.files, try to get the range from visual marks
+      -- For mini.files, try to get the range from visual marks for accuracy
       if current_ft == "minifiles" or string.match(current_bufname, "minifiles://") then
         local start_line = vim.fn.line("'<")
         local end_line = vim.fn.line("'>")
 
         if start_line > 0 and end_line > 0 and start_line <= end_line then
-          -- Use range-based selection for mini.files
           files, error = integrations._get_mini_files_selection_with_range(start_line, end_line)
         else
-          -- Fall back to regular method
-          files, error = integrations.get_selected_files_from_tree()
+          -- If range invalid, try visual selection fallback (uses pre-captured visual_data)
+          files, error = visual_cmd_module.get_files_from_visual_selection(visual_data)
         end
       else
-        files, error = integrations.get_selected_files_from_tree()
+        -- Use visual selection-aware extraction for tree buffers (neo-tree, nvim-tree, oil)
+        files, error = visual_cmd_module.get_files_from_visual_selection(visual_data)
+        if (not files or #files == 0) and not error then
+          -- Fallback: try generic selection if visual data was unavailable
+          files, error = integrations.get_selected_files_from_tree()
+        end
       end
 
       if error then

@@ -249,6 +249,10 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
                         -- For local installations: "~/.claude/local/claude"
                         -- For native binary: use output from 'which claude'
 
+    -- Send/Focus Behavior
+    -- When true, successful sends will focus the Claude terminal if already connected
+    focus_after_send = false,
+
     -- Selection Tracking
     track_selection = true,
     visual_demotion_delay_ms = 50,
@@ -257,7 +261,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     terminal = {
       split_side = "right", -- "left" or "right"
       split_width_percentage = 0.30,
-      provider = "auto", -- "auto", "snacks", "native", "external", or custom provider table
+      provider = "auto", -- "auto", "snacks", "native", "external", "none", or custom provider table
       auto_close = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
 
@@ -283,6 +287,39 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     -- Your keymaps here
   },
 }
+```
+
+### Working Directory Control
+
+You can fix the Claude terminal's working directory regardless of `autochdir` and buffer-local cwd changes. Options (precedence order):
+
+- `cwd_provider(ctx)`: function that returns a directory string. Receives `{ file, file_dir, cwd }`.
+- `cwd`: static path to use as working directory.
+- `git_repo_cwd = true`: resolves git root from the current file directory (or cwd if no file).
+
+Examples:
+
+```lua
+require("claudecode").setup({
+  -- Top-level aliases are supported and forwarded to terminal config
+  git_repo_cwd = true,
+})
+
+require("claudecode").setup({
+  terminal = {
+    cwd = vim.fn.expand("~/projects/my-app"),
+  },
+})
+
+require("claudecode").setup({
+  terminal = {
+    cwd_provider = function(ctx)
+      -- Prefer repo root; fallback to file's directory
+      local cwd = require("claudecode.cwd").git_root(ctx.file_dir or ctx.cwd) or ctx.file_dir or ctx.cwd
+      return cwd
+    end,
+  },
+})
 ```
 
 ## Floating Window Configuration
@@ -450,6 +487,26 @@ For complete configuration options, see:
 - [Snacks.nvim Window Documentation](https://github.com/folke/snacks.nvim/blob/main/docs/win.md)
 
 ## Terminal Providers
+
+### None (No-Op) Provider
+
+Run Claude Code without any terminal management inside Neovim. This is useful for advanced setups where you manage the CLI externally (tmux, kitty, separate terminal windows) while still using the WebSocket server and tools.
+
+```lua
+{
+  "coder/claudecode.nvim",
+  opts = {
+    terminal = {
+      provider = "none", -- no UI actions; server + tools remain available
+    },
+  },
+}
+```
+
+Notes:
+
+- No windows/buffers are created. `:ClaudeCode` and related commands will not open anything.
+- The WebSocket server still starts and broadcasts work as usual. Launch the Claude CLI externally when desired.
 
 ### External Terminal Provider
 
